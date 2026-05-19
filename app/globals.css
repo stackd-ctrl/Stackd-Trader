@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body {
+  background-color: #0A0A0A;
+  color: #F5F0E8;
+  min-height: 100vh;
+}
+
+::selection {
+  background: #F5C400;
+  color: #0A0A0A;
+}
+
+/* Tabular nums for all numeric readouts. */
+.num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+/* Subtle scrollbars on dark surfaces. */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #1F1E1B;
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #2A2925;
+}

@@ -1,0 +1,9 @@
+{
+  "crons": [
+    { "path": "/api/cron/morning",            "schedule": "0 13 * * 1-5" },
+    { "path": "/api/cron/signal-scan",        "schedule": "* * * * 1-5" },
+    { "path": "/api/cron/anomaly-check",      "schedule": "*/15 * * * 1-5" },
+    { "path": "/api/cron/position-monitor",   "schedule": "* * * * *" },
+    { "path": "/api/cron/evening",            "schedule": "30 20 * * 1-5" }
+  ]
+}
