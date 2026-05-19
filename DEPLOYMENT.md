@@ -81,19 +81,56 @@ Click **Deploy**. First build takes ~2 minutes. When done, click **Visit**.
 
 ## 5. Verify cron jobs
 
-After the first deploy, go to **Project → Cron Jobs**. You should see five entries
-from `vercel.json`:
+After the first deploy, go to **Project → Cron Jobs**. The current `vercel.json`
+ships **2 cron jobs** to stay within Vercel **Hobby tier** limits (2 crons max,
+daily frequency only):
 
 | Path | Schedule | Behavior |
 |---|---|---|
 | `/api/cron/morning` | `0 13 * * 1-5` | 9:00am ET weekdays |
-| `/api/cron/signal-scan` | `* * * * 1-5` | every minute, weekdays |
-| `/api/cron/anomaly-check` | `*/15 * * * 1-5` | every 15 min, weekdays |
-| `/api/cron/position-monitor` | `*/1 * * * 1-5` | every minute, weekdays |
 | `/api/cron/evening` | `30 20 * * 1-5` | 4:30pm ET weekdays |
 
 Vercel attaches `Authorization: Bearer ${CRON_SECRET}` automatically; our
 `isAuthorizedCron` helper validates it.
+
+### The bot needs more than 2 daily crons
+
+For real paper trading, you also need:
+
+| Cron | Frequency | Purpose |
+|---|---|---|
+| `/api/cron/signal-scan` | every minute (weekdays) | Run technical scan + Claude review + execute |
+| `/api/cron/anomaly-check` | every 15 min (weekdays) | Risk monitor for unusual conditions |
+| `/api/cron/position-monitor` | every minute | Bracket health, breakeven trail, EOD close, kill-switch |
+
+Two paths to add them back:
+
+**Option A — Upgrade to Vercel Pro ($20/mo).** Restore the full `vercel.json`:
+
+```json
+{
+  "crons": [
+    { "path": "/api/cron/morning",          "schedule": "0 13 * * 1-5" },
+    { "path": "/api/cron/signal-scan",      "schedule": "* * * * 1-5" },
+    { "path": "/api/cron/anomaly-check",    "schedule": "*/15 * * * 1-5" },
+    { "path": "/api/cron/position-monitor", "schedule": "* * * * *" },
+    { "path": "/api/cron/evening",          "schedule": "30 20 * * 1-5" }
+  ]
+}
+```
+
+**Option B — Free external scheduler.** Use [cron-job.org](https://cron-job.org)
+(free) or GitHub Actions to POST to your Vercel URLs:
+
+```
+URL:     https://<your-deploy>.vercel.app/api/cron/signal-scan
+Method:  POST
+Headers: x-manual-trigger: true
+Schedule: every minute, Mon-Fri
+```
+
+The routes accept POST with the `x-manual-trigger: true` header as their
+external entry point — same code as the GET path Vercel cron uses.
 
 ---
 
