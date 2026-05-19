@@ -47,9 +47,11 @@ export function supabaseServer(cookieStore: CookieStore) {
   const { url, anonKey } = publicEnv();
   return createServerClient<Database>(url, anonKey, {
     cookies: {
-      get: (name) => cookieStore.get(name)?.value,
-      set: (name, value, options) => cookieStore.set?.(name, value, options),
-      remove: (name, options) => cookieStore.set?.(name, '', { ...options, maxAge: 0 }),
+      get: (name: string) => cookieStore.get(name)?.value,
+      set: (name: string, value: string, options: Record<string, unknown>) =>
+        cookieStore.set?.(name, value, options),
+      remove: (name: string, options: Record<string, unknown>) =>
+        cookieStore.set?.(name, '', { ...options, maxAge: 0 }),
     },
   });
 }
