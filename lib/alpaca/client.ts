@@ -264,6 +264,51 @@ interface RawSnapshot {
   minuteBar?: { c?: number; v?: number };
 }
 
+// ---- Crypto bars (OHLCV candles) -------------------------------------------
+// Free with a ~200/min limit, vs Polygon's free 5/min. Used for the signal
+// scan + regime detection so a 5-7 instrument scan doesn't blow the rate cap.
+
+export interface AlpacaBar {
+  time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+const CRYPTO_TIMEFRAME: Record<string, string> = {
+  '1m': '1Min', '5m': '5Min', '15m': '15Min', '1h': '1Hour', '1d': '1Day',
+};
+
+export async function getCryptoBars(
+  symbol: string,
+  timeframe: keyof typeof CRYPTO_TIMEFRAME,
+  limit = 100,
+): Promise<AlpacaBar[]> {
+  const tf = CRYPTO_TIMEFRAME[timeframe];
+  if (!tf) throw new AlpacaError(`Unsupported timeframe: ${timeframe}`, 400, null);
+
+  // Pull a generous window then trim to the most recent `limit` bars.
+  const windowDays = timeframe === '1d' ? 400 : 10;
+  const start = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
+  const qs = new URLSearchParams({
+    symbols: symbol,
+    timeframe: tf,
+    start,
+    limit: '10000',
+    sort: 'asc',
+  });
+
+  type RawBar = { t: string; o: number; h: number; l: number; c: number; v: number };
+  type Raw = { bars?: Record<string, RawBar[]> };
+  const raw = await request<Raw>(dataBaseUrl(), `/v1beta3/crypto/us/bars?${qs.toString()}`);
+  const bars = raw.bars?.[symbol] ?? [];
+  return bars.slice(-limit).map((b) => ({
+    time: b.t, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v,
+  }));
+}
+
 function mapSnapshot(symbol: string, s: RawSnapshot): AlpacaSnapshot {
   const price = s.latestTrade?.p ?? s.minuteBar?.c ?? s.dailyBar?.c ?? 0;
   return {

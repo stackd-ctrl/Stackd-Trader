@@ -11,7 +11,7 @@ import { passesRiskGuard } from './riskGuard';
 import { passesTopstepGuard } from './topstepGuard';
 import { executeEntry } from './orderExecutor';
 import { getAccount } from '@/lib/alpaca/client';
-import { getSnapshot } from '@/lib/polygon/client';
+import { getSnapshot } from '@/lib/marketData';
 import { isMarketHours, isCryptoSession } from '@/lib/time';
 import { instrumentByKey, instrumentsForMode } from '@/lib/instruments';
 import { computeRegimeForInstrument, persistRegime } from '@/lib/regime/detector';

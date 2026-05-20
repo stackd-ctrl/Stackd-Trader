@@ -22,11 +22,16 @@ export const SIGNAL_WEIGHTS = {
 export const NON_SENTIMENT_MAX = 90;
 export const TOTAL_MAX = 100;
 
+// NOTE: paper-test calibration (2026-05-20). Lowered from RAW 58.5 / ENTER 65
+// so the bot acts on the moderate setups it finds in choppy crypto conditions
+// and we can validate the execution path end to end. Raise both back toward
+// 58.5 / 65 before trading live money.
+
 /** Raw (pre-Claude) gate: signal must clear this to be sent to Claude. */
-export const RAW_THRESHOLD = 58.5;
+export const RAW_THRESHOLD = 48;
 
 /** Final gate: total_score must clear this to fire as ENTER. (Day 1 was 6.5/10.) */
-export const ENTER_THRESHOLD = 65;
+export const ENTER_THRESHOLD = 56;
 
 /**
  * Effective action for a given total_score on the 0..100 scale.

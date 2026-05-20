@@ -11,7 +11,7 @@ import { NextResponse } from 'next/server';
 import { supabaseService } from '@/lib/supabase';
 import { refreshWeeklyCalendar, getTodayEvents } from '@/lib/calendar/events';
 import { refreshMarketNews } from '@/lib/polygon/news';
-import { getSnapshot } from '@/lib/polygon/client';
+import { getSnapshot } from '@/lib/marketData';
 import { getAccount } from '@/lib/alpaca/client';
 import { regimeTechnicals } from '@/lib/regime/detector';
 import { classifyRegimeWithContext } from '@/lib/claude/regime';

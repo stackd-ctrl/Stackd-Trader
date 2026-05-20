@@ -6,7 +6,7 @@
 import 'server-only';
 import { supabaseService } from '@/lib/supabase';
 import { ADX, ATR } from '@/lib/indicators';
-import { getCandles } from '@/lib/polygon/client';
+import { getCandles } from '@/lib/marketData';
 import type { MarketRegime, TradeMode } from '@/types/database';
 
 export interface RegimeInput {

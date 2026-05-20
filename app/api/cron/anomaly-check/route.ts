@@ -3,7 +3,7 @@
 import { NextResponse } from 'next/server';
 import { supabaseService } from '@/lib/supabase';
 import { detectAnomalies } from '@/lib/claude/anomaly';
-import { getSnapshot, getCandles } from '@/lib/polygon/client';
+import { getSnapshot, getCandles } from '@/lib/marketData';
 import { VOLUME_RATIO } from '@/lib/indicators';
 import { instrumentsForMode } from '@/lib/instruments';
 import { isAuthorizedCron } from '@/lib/cronAuth';

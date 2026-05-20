@@ -9,9 +9,8 @@ import { supabaseService } from '@/lib/supabase';
 import { getOrders, placeOrder, cancelOrder, type AlpacaOrder } from '@/lib/alpaca/client';
 import { closeAllPositions, executeExit } from './orderExecutor';
 import { instrumentByKey } from '@/lib/instruments';
-import { getSnapshot } from '@/lib/polygon/client';
+import { getSnapshot, getCandles } from '@/lib/marketData';
 import { ATR } from '@/lib/indicators';
-import { getCandles } from '@/lib/polygon/client';
 import { nowET } from '@/lib/time';
 import type { TradeMode } from '@/types/database';
 

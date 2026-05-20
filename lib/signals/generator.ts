@@ -7,7 +7,7 @@
 import 'server-only';
 import { supabaseService } from '@/lib/supabase';
 import { ADX, ATR, MACD, RSI, VOLUME_RATIO, detectKeyLevelBreak } from '@/lib/indicators';
-import { getCandles, type Candle } from '@/lib/polygon/client';
+import { getCandles, type Candle } from '@/lib/marketData';
 import { instrumentsForMode, type InstrumentConfig } from '@/lib/instruments';
 import { isBlackoutPeriod } from '@/lib/calendar/events';
 import { isCryptoSession, isMarketHours } from '@/lib/time';
