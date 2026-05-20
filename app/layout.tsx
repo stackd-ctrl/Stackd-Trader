@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Syne, DM_Sans } from 'next/font/google';
 import './globals.css';
 
@@ -19,6 +19,12 @@ const dmSans = DM_Sans({
 export const metadata: Metadata = {
   title: 'STACKD TRADER',
   description: 'AI-powered algorithmic trading bot and dashboard.',
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  themeColor: '#0A0A0A',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

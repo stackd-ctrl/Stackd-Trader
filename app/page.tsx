@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Sidebar, type SectionKey, type SidebarBadges } from '@/components/dashboard/Sidebar';
+import { MobileNav } from '@/components/dashboard/MobileNav';
 import { TopBar } from '@/components/dashboard/TopBar';
 import { ModeToggle } from '@/components/dashboard/ModeToggle';
 import { Overview } from '@/components/dashboard/Overview';
@@ -178,10 +179,12 @@ export default function Page() {
         <ModeToggle mode={mode} onChange={setMode} />
       </TopBar>
 
+      <MobileNav active={section} onSelect={setSection} badges={sidebarBadges} />
+
       <div className="flex flex-1">
         <Sidebar active={section} onSelect={setSection} badges={sidebarBadges} />
 
-        <main className="flex-1 p-6">
+        <main className="flex-1 p-4 md:p-6 min-w-0">
           {!SUPABASE_CONFIGURED && (
             <div className="mb-4 px-4 py-2 rounded-md border border-warn/40 bg-warn/10 text-warn text-xs">
               Running on mock data. Add Supabase + Alpaca + Polygon + Anthropic keys to .env.local for live mode.

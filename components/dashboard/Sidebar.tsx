@@ -10,13 +10,13 @@ export type SectionKey =
   | 'compliance'
   | 'settings';
 
-interface NavItem {
+export interface NavItem {
   key: SectionKey;
   label: string;
   description: string;
 }
 
-const ITEMS: NavItem[] = [
+export const NAV_ITEMS: NavItem[] = [
   { key: 'overview',    label: 'Overview',          description: 'Today at a glance' },
   { key: 'positions',   label: 'Live Positions',    description: 'Open trades' },
   { key: 'signals',     label: 'Signal Feed',       description: 'AI signal analysis' },
@@ -44,9 +44,9 @@ export function Sidebar({
   badges?: SidebarBadges;
 }) {
   return (
-    <aside className="w-64 shrink-0 border-r border-line bg-panel/40 min-h-[calc(100vh-64px)] flex flex-col">
+    <aside className="hidden md:flex w-64 shrink-0 border-r border-line bg-panel/40 min-h-[calc(100vh-64px)] flex-col">
       <nav className="p-3 space-y-1 flex-1">
-        {ITEMS.map((item) => {
+        {NAV_ITEMS.map((item) => {
           const isActive = item.key === active;
           return (
             <button
