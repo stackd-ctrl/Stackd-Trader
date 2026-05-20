@@ -69,6 +69,9 @@ scoped to **Production** (and Preview if you want preview deploys to work):
 | `POLYGON_BASE_URL` | `https://api.polygon.io` |
 | `FMP_API_KEY` | financialmodelingprep.com → API key (optional; calendar is paid) |
 | `FMP_BASE_URL` | `https://financialmodelingprep.com/api/v3` |
+| `RESEND_API_KEY` | resend.com → API Keys (optional; trade alerts silently no-op if missing) |
+| `TRADE_ALERT_FROM` | Verified Resend sender, e.g. `alerts@stackdstudiosai.com` |
+| `TRADE_ALERT_TO` | Where trade alerts land (e.g. `hicksch7@gmail.com`) |
 | `CRON_SECRET` | **Vercel auto-generates** when you enable cron jobs. Set it in env so the routes can validate the bearer token. |
 
 ---

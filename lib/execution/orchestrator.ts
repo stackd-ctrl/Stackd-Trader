@@ -14,6 +14,7 @@ import { getAccount } from '@/lib/alpaca/client';
 import { getSnapshot } from '@/lib/polygon/client';
 import { isMarketHours, isCryptoSession } from '@/lib/time';
 import { instrumentByKey, instrumentsForMode } from '@/lib/instruments';
+import { computeRegimeForInstrument, persistRegime } from '@/lib/regime/detector';
 import { ENTER_THRESHOLD, SIGNAL_WEIGHTS } from '@/lib/constants';
 import type {
   MarketRegime,
@@ -181,8 +182,20 @@ export async function runSignalScan(mode: TradeMode): Promise<RunSignalScanResul
     return { scanned: false, reason: 'no tradable session' };
   }
 
-  // Step 2: get regime.
-  const regime: MarketRegime = status.regime;
+  // Step 2: refresh the regime from live data so the gate reflects current
+  // conditions, not just the weekday 9am morning cron (crypto trades 24/7).
+  // Falls back to the stored regime if the recompute fails.
+  let regime: MarketRegime = status.regime;
+  try {
+    const primary = instrumentsForMode(mode)[0]?.key;
+    if (primary) {
+      const cls = await computeRegimeForInstrument(primary);
+      await persistRegime(mode, cls);
+      regime = cls.regime;
+    }
+  } catch (err) {
+    console.error('[orchestrator] regime recompute failed; using stored regime', err);
+  }
 
   // Step 3: active strategies.
   const allowed = STRATEGIES_BY_REGIME[regime] ?? [];

@@ -92,6 +92,44 @@ export function classifyRegime(input: RegimeInput): RegimeClassification {
   };
 }
 
+export interface RegimeTechnicals {
+  adx: number;
+  atr: number;            // recent daily ATR (current volatility)
+  atr20DayAvg: number;    // baseline daily ATR (normal volatility)
+  recentClose: number | null;
+  priorClose: number | null;
+}
+
+/**
+ * Pull live candles and compute the technical inputs the regime classifier
+ * needs.
+ *
+ * Volatility MUST be daily-vs-daily so the ratio is on a comparable scale:
+ * `atr` is a short (5-day) daily ATR, `atr20DayAvg` is the 20-day daily ATR.
+ * The old code compared a 5-minute ATR against a daily ATR, which yields a
+ * permanently tiny ratio (~0.03) that always trips the low_volatility gate and
+ * stops the bot from ever trading. ADX stays on intraday bars for trend
+ * responsiveness.
+ */
+export async function regimeTechnicals(instrument: string): Promise<RegimeTechnicals> {
+  const intraday = await getCandles(instrument, '5m', 100).catch(() => []);
+  const daily = await getCandles(instrument, '1d', 60).catch(() => []);
+
+  const adx = intraday.length >= 28 ? ADX(intraday, 14).adx : 0;
+  const atrRecent = daily.length >= 6 ? ATR(daily.slice(-6), 5) : 0;
+  const atrBaseline = daily.length >= 21 ? ATR(daily.slice(-21), 20)
+                    : atrRecent;
+
+  const n = intraday.length;
+  return {
+    adx,
+    atr: atrRecent,
+    atr20DayAvg: atrBaseline,
+    recentClose: n >= 1 ? intraday[n - 1].close : null,
+    priorClose: n >= 2 ? intraday[n - 2].close : null,
+  };
+}
+
 /**
  * Pull live data for one instrument and compute its regime. Picks the
  * primary instrument for the mode (defaults to the first match).
@@ -100,16 +138,11 @@ export async function computeRegimeForInstrument(
   instrument: string,
   opts: { newsEventActive?: boolean } = {},
 ): Promise<RegimeClassification> {
-  const intraday = await getCandles(instrument, '5m', 100);
-  const daily = await getCandles(instrument, '1d', 30);
-  const adxRes = ADX(intraday, 14);
-  const atrToday = ATR(intraday, 14);
-  const atr20d = ATR(daily.slice(-21), 20);
-
+  const tech = await regimeTechnicals(instrument);
   return classifyRegime({
-    adx: adxRes.adx,
-    atr: atrToday,
-    atr20DayAvg: atr20d,
+    adx: tech.adx,
+    atr: tech.atr,
+    atr20DayAvg: tech.atr20DayAvg,
     newsEventActive: opts.newsEventActive ?? false,
   });
 }

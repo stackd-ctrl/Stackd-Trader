@@ -52,6 +52,42 @@ export const INSTRUMENTS: InstrumentConfig[] = [
     minStopPoints: 5,         // ~$5 minimum stop on ETH
   },
   {
+    key: 'SOL/USD',
+    display: 'SOL',
+    class: 'crypto',
+    feed: 'alpaca_crypto',
+    alpacaSymbol: 'SOL/USD',
+    polygonTicker: 'X:SOLUSD',
+    defaultModes: ['paper', 'live_crypto'],
+    contractMultiplier: 1,
+    tickSize: 0.01,
+    minStopPoints: 2,        // ~$2 minimum stop on SOL (~1% of $200)
+  },
+  {
+    key: 'LINK/USD',
+    display: 'LINK',
+    class: 'crypto',
+    feed: 'alpaca_crypto',
+    alpacaSymbol: 'LINK/USD',
+    polygonTicker: 'X:LINKUSD',
+    defaultModes: ['paper', 'live_crypto'],
+    contractMultiplier: 1,
+    tickSize: 0.01,
+    minStopPoints: 0.2,      // ~$0.20 minimum stop on LINK (~1% of $20)
+  },
+  {
+    key: 'AVAX/USD',
+    display: 'AVAX',
+    class: 'crypto',
+    feed: 'alpaca_crypto',
+    alpacaSymbol: 'AVAX/USD',
+    polygonTicker: 'X:AVAXUSD',
+    defaultModes: ['paper', 'live_crypto'],
+    contractMultiplier: 1,
+    tickSize: 0.01,
+    minStopPoints: 0.5,      // ~$0.50 minimum stop on AVAX (~1% of $40)
+  },
+  {
     key: 'MES',
     display: 'MES',
     class: 'futures',

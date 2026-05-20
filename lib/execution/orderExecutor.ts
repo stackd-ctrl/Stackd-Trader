@@ -14,6 +14,7 @@ import {
 } from '@/lib/alpaca/client';
 import { supabaseService } from '@/lib/supabase';
 import { instrumentByKey } from '@/lib/instruments';
+import { sendEntryAlert, sendExitAlert } from '@/lib/email/tradeAlerts';
 import type {
   ExitReason,
   Signal,
@@ -280,6 +281,25 @@ export async function executeEntry(input: ExecuteEntryInput): Promise<ExecuteEnt
     fill_price: actualFillPrice,
   });
 
+  // Trade alert email. Wrapped + already times out internally — never blocks return.
+  try {
+    await sendEntryAlert({
+      tradeId: tradeRow.id,
+      mode: input.mode,
+      instrument: input.signal.instrument,
+      direction: input.direction,
+      strategy: input.signal.strategy,
+      size: input.size,
+      entryPrice: actualFillPrice,
+      stopLoss: input.stopLoss,
+      takeProfit: input.takeProfit,
+      signalScore: input.signal.total_score,
+      claudeReasoning: input.signal.claude_explanation,
+    });
+  } catch (err) {
+    console.error('[orderExecutor] entry alert dispatch failed', err);
+  }
+
   return { success: true, tradeId: tradeRow.id, orderId: entryOrder.id, error: null };
 }
 
@@ -394,6 +414,26 @@ export async function executeExit(tradeId: string, reason: ExitReason): Promise<
   await auditEvent(trade.mode, 'executeExit success', 'info', {
     trade_id: tradeId, reason, exit_price: exitPrice, pnl: pnlRounded,
   });
+
+  // Trade alert email. Wrapped + already times out internally — never blocks return.
+  try {
+    if (trade.direction) {
+      await sendExitAlert({
+        tradeId,
+        mode: trade.mode,
+        instrument: trade.instrument,
+        direction: trade.direction,
+        strategy: trade.strategy,
+        size: trade.quantity,
+        entryPrice: trade.entry_price,
+        exitPrice,
+        pnl: pnlRounded,
+        reason,
+      });
+    }
+  } catch (err) {
+    console.error('[orderExecutor] exit alert dispatch failed', err);
+  }
 
   return { success: true, exitPrice, pnl: pnlRounded, error: null };
 }

@@ -11,9 +11,9 @@ import { NextResponse } from 'next/server';
 import { supabaseService } from '@/lib/supabase';
 import { refreshWeeklyCalendar, getTodayEvents } from '@/lib/calendar/events';
 import { refreshMarketNews } from '@/lib/polygon/news';
-import { ADX, ATR } from '@/lib/indicators';
-import { getCandles, getSnapshot } from '@/lib/polygon/client';
+import { getSnapshot } from '@/lib/polygon/client';
 import { getAccount } from '@/lib/alpaca/client';
+import { regimeTechnicals } from '@/lib/regime/detector';
 import { classifyRegimeWithContext } from '@/lib/claude/regime';
 import { generateMorningBrief } from '@/lib/claude/morning';
 import { instrumentsForMode } from '@/lib/instruments';
@@ -34,21 +34,17 @@ async function run(): Promise<NextResponse> {
 
   const todayEvents = await getTodayEvents();
 
-  // Compute regime from BTC/USD (primary crypto liquidity proxy).
+  // Compute regime from the primary instrument (first crypto for the mode).
   const primary = instrumentsForMode(mode)[0]?.key ?? 'BTC/USD';
-  const intraday = await getCandles(primary, '5m', 100).catch(() => []);
-  const daily    = await getCandles(primary, '1d', 30).catch(() => []);
-  const adx = intraday.length >= 28 ? ADX(intraday, 14).adx : 0;
-  const atrToday = intraday.length >= 15 ? ATR(intraday, 14) : 0;
-  const atr20d   = daily.length >= 21    ? ATR(daily.slice(-21), 20) : 0;
+  const tech = await regimeTechnicals(primary);
 
   const intel = await classifyRegimeWithContext({
     mode,
-    adx,
-    atr: atrToday,
-    atr_20day_avg: atr20d,
-    recent_price_action: intraday.length >= 2
-      ? `${primary} last 5m close $${intraday[intraday.length - 1].close.toFixed(2)}, prior $${intraday[intraday.length - 2].close.toFixed(2)}`
+    adx: tech.adx,
+    atr: tech.atr,
+    atr_20day_avg: tech.atr20DayAvg,
+    recent_price_action: tech.recentClose !== null && tech.priorClose !== null
+      ? `${primary} last 5m close $${tech.recentClose.toFixed(2)}, prior $${tech.priorClose.toFixed(2)}`
       : 'no recent bars',
     todays_news_themes: [],
     economic_events_today: todayEvents,
