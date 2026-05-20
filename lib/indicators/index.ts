@@ -119,10 +119,15 @@ export function ATR(data: HLC[], period = 14): number {
 // ============================================================================
 
 export function VOLUME_RATIO(volumes: number[], period = 20): number {
-  if (volumes.length === 0) return 0;
-  const slice = volumes.slice(-Math.max(period, 1));
-  const avg = slice.reduce((a, b) => a + b, 0) / slice.length;
-  const current = volumes[volumes.length - 1];
+  // The most recent bar is usually still forming (only partial volume has
+  // accumulated), which drags the ratio toward 0 and zeroes the volume factor.
+  // Compare the last COMPLETED bar against the trailing average of completed
+  // bars instead.
+  if (volumes.length < 2) return 0;
+  const completed = volumes.slice(0, -1);
+  const window = completed.slice(-Math.max(period, 1));
+  const avg = window.reduce((a, b) => a + b, 0) / window.length;
+  const current = completed[completed.length - 1];
   if (avg === 0) return 0;
   return current / avg;
 }
