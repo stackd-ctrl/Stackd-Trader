@@ -63,7 +63,8 @@ export async function processSignal(signal: Signal, mode: TradeMode): Promise<Pr
   }
 
   let accountBalance = 100_000;
-  try { accountBalance = (await getAccount()).equity; } catch { /* paper default */ }
+  let buyingPower = 100_000;
+  try { const acct = await getAccount(); accountBalance = acct.equity; buyingPower = acct.buying_power; } catch { /* paper default */ }
 
   // Step 3: levels.
   const levels = calculateLevels({
@@ -73,6 +74,20 @@ export async function processSignal(signal: Signal, mode: TradeMode): Promise<Pr
     atr: signal.atr,
     strategy: signal.strategy,
   });
+
+  // Guarantee a sane R/R: in low-ATR conditions the stop hits the per-instrument
+  // minimum floor while the ATR target stays tight, dropping R/R below the
+  // guard's 1.6 min and blocking an otherwise-good signal. Widen the target to
+  // 2:1 on the actual stop distance.
+  const tick = inst.tickSize > 0 ? inst.tickSize : 0.01;
+  const roundTick = (v: number) => Number((Math.round(v / tick) * tick).toFixed(6));
+  const stopDistance = Math.abs(currentPrice - levels.stopLoss);
+  let takeProfit = levels.takeProfit;
+  if (levels.rewardToRisk < 1.8 && stopDistance > 0) {
+    takeProfit = roundTick(
+      signal.direction === 'long' ? currentPrice + stopDistance * 2 : currentPrice - stopDistance * 2,
+    );
+  }
 
   // Drawdown from latest snapshot for position sizing.
   const sb = supabaseService();
@@ -96,6 +111,16 @@ export async function processSignal(signal: Signal, mode: TradeMode): Promise<Pr
     return { status: 'skipped', reason: 'position size rounded to 0' };
   }
 
+  // Notional cap: the risk sizer bounds dollar-RISK, not notional. Crypto is
+  // cash-only (no margin), so cap to available cash or Alpaca rejects the order.
+  const multiplier = inst.contractMultiplier ?? 1;
+  const cashAvailable = Math.min(accountBalance, buyingPower);
+  const maxAffordable = Math.floor((cashAvailable * 0.95) / (currentPrice * multiplier));
+  if (maxAffordable < 1) {
+    return { status: 'skipped', reason: `insufficient buying power for 1 unit of ${signal.instrument}` };
+  }
+  const cappedSize = Math.min(sizeResult.contracts, maxAffordable);
+
   // Step 5: risk guard.
   const guard = await passesRiskGuard({
     mode,
@@ -103,13 +128,13 @@ export async function processSignal(signal: Signal, mode: TradeMode): Promise<Pr
     strategy: signal.strategy,
     proposedEntry: currentPrice,
     proposedStop: levels.stopLoss,
-    proposedTarget: levels.takeProfit,
-    proposedSize: sizeResult.contracts,
+    proposedTarget: takeProfit,
+    proposedSize: cappedSize,
   });
   if (!guard.approved) {
     return { status: 'skipped', reason: `risk guard: ${guard.reason}` };
   }
-  let finalSize = guard.adjustedSize ?? sizeResult.contracts;
+  let finalSize = Math.min(guard.adjustedSize ?? cappedSize, maxAffordable);
 
   // Step 5b: Topstep guard (only when mode is topstep).
   if (mode === 'topstep') {
@@ -133,7 +158,7 @@ export async function processSignal(signal: Signal, mode: TradeMode): Promise<Pr
     direction: signal.direction,
     entryPrice: currentPrice,
     stopLoss: levels.stopLoss,
-    takeProfit: levels.takeProfit,
+    takeProfit,
     size: finalSize,
     mode,
   });

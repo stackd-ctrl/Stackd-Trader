@@ -59,7 +59,24 @@ export interface GeneratorResult {
 
 // ---- Factor scoring (each returns 0..10) -----------------------------------
 
-function scoreRSI(rsi: number, direction: TradeDirection): number {
+function scoreRSI(rsi: number, direction: TradeDirection, strategy: TradeStrategy): number {
+  if (strategy === 'mean_reversion') {
+    // Reward fading genuine extremes, not mid-range noise.
+    if (direction === 'long') {
+      // expecting a bounce from oversold
+      if (rsi <= 30) return 10;
+      if (rsi <= 40) return 7;
+      if (rsi <= 45) return 4;
+      return 1;
+    }
+    // short: expecting a pullback from overbought
+    if (rsi >= 70) return 10;
+    if (rsi >= 60) return 7;
+    if (rsi >= 55) return 4;
+    return 1;
+  }
+
+  // Momentum / news_sentiment.
   // Long sweet spot: 50..65 (momentum entering, not exhausted)
   // Short sweet spot: 35..50
   if (direction === 'long') {
@@ -142,8 +159,21 @@ export function weightedRawScore(scores: FactorScores): number {
 
 // ---- Strategy + direction picker -------------------------------------------
 
-function pickDirection(closes: number[], rsi: number, histogram: number): TradeDirection {
-  // Simple bias: above midline RSI + positive histogram = long; flip for short.
+function pickDirection(
+  strategy: TradeStrategy,
+  closes: number[],
+  rsi: number,
+  histogram: number,
+): TradeDirection {
+  // Mean reversion is CONTRARIAN: fade the move. Below midline RSI = oversold,
+  // expect a bounce (long); above = overbought, expect a pullback (short).
+  // Using a trend-following direction here (the old behavior) produced
+  // incoherent setups like "mean-reversion short into a downtrend" that the
+  // Claude reviewer correctly rejected.
+  if (strategy === 'mean_reversion') {
+    return rsi <= 50 ? 'long' : 'short';
+  }
+  // Momentum / news_sentiment: trend-following. Vote on price-vs-SMA, MACD, RSI.
   const last = closes[closes.length - 1];
   const sma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / Math.min(20, closes.length);
   const trendBias = last >= sma20 ? 1 : -1;
@@ -184,11 +214,11 @@ function scoreInstrument(
   const broke = detectKeyLevelBreak(candles);
   const atrToday = ATR(candles, 14);
 
-  const direction = pickDirection(closes, rsi, macd.histogram);
   const strategy = pickStrategy(opts.regime, broke);
+  const direction = pickDirection(strategy, closes, rsi, macd.histogram);
 
   const factors: FactorScores = {
-    rsi:      scoreRSI(rsi, direction),
+    rsi:      scoreRSI(rsi, direction, strategy),
     macd:     scoreMACDHistogram(macd.histogram, macdPrev.histogram, direction),
     volume:   scoreVolume(volRatio),
     keyLevel: scoreKeyLevel(broke),
