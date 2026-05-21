@@ -11,7 +11,8 @@ import { passesRiskGuard } from './riskGuard';
 import { passesTopstepGuard } from './topstepGuard';
 import { executeEntry } from './orderExecutor';
 import { getAccount } from '@/lib/alpaca/client';
-import { getSnapshot } from '@/lib/marketData';
+import { getSnapshot, getCandles } from '@/lib/marketData';
+import { ATR } from '@/lib/indicators';
 import { isMarketHours, isCryptoSession } from '@/lib/time';
 import { instrumentByKey, instrumentsForMode } from '@/lib/instruments';
 import { computeRegimeForInstrument, persistRegime } from '@/lib/regime/detector';
@@ -19,6 +20,7 @@ import { ENTER_THRESHOLD, SIGNAL_WEIGHTS } from '@/lib/constants';
 import type {
   MarketRegime,
   Signal,
+  TradeDirection,
   TradeMode,
 } from '@/types/database';
 
@@ -285,4 +287,207 @@ export async function runSignalScan(mode: TradeMode): Promise<RunSignalScanResul
   }
 
   return { scanned: true, scan, processed };
+}
+
+// ---- manualEntry: human-initiated trade from the dashboard ------------------
+//
+// Reuses the bot's exact levels + sizing + risk guard, but is NOT gated on a
+// Claude score (the human is the decision). Levels/size come from ATR; the
+// risk guard runs with manual:true so it only bypasses the bot on/off toggle.
+// `dryRun` returns the computed numbers without placing an order (UI preview).
+
+export interface ManualEntryInput {
+  instrument: string;
+  direction: TradeDirection;
+  mode: TradeMode;
+  /** 'full' = up to 1.5% account risk; 'half' = half that. */
+  tier?: 'full' | 'half';
+  dryRun?: boolean;
+}
+
+export interface ManualEntryResult {
+  status: 'executed' | 'skipped' | 'preview';
+  reason: string;
+  tradeId?: string;
+  preview?: {
+    entryPrice: number;
+    stopLoss: number;
+    takeProfit: number;
+    size: number;
+    rewardToRisk: number;
+    dollarRisk: number;
+  };
+}
+
+export async function manualEntry(input: ManualEntryInput): Promise<ManualEntryResult> {
+  const inst = instrumentByKey(input.instrument);
+  if (!inst) return { status: 'skipped', reason: `Unknown instrument ${input.instrument}` };
+  if (!inst.alpacaSymbol) {
+    return { status: 'skipped', reason: `${input.instrument} is not tradable on Alpaca (futures broker required)` };
+  }
+  // Alpaca does not support shorting spot crypto.
+  if (inst.class === 'crypto' && input.direction === 'short') {
+    return { status: 'skipped', reason: 'Alpaca does not support shorting spot crypto. Use Long for crypto.' };
+  }
+
+  // Price + ATR from live candles.
+  let currentPrice: number;
+  try {
+    currentPrice = (await getSnapshot(input.instrument)).price;
+  } catch (err) {
+    return { status: 'skipped', reason: `Could not get price: ${(err as Error).message}` };
+  }
+  if (!currentPrice || currentPrice <= 0) {
+    return { status: 'skipped', reason: 'Live price unavailable' };
+  }
+
+  const candles = await getCandles(input.instrument, '5m', 100).catch(() => []);
+  const atr = candles.length >= 15 ? ATR(candles, 14) : 0;
+  if (atr <= 0) {
+    return { status: 'skipped', reason: 'Could not compute ATR (no candle data)' };
+  }
+
+  let accountBalance = 100_000;
+  let buyingPower = 100_000;
+  try {
+    const acct = await getAccount();
+    accountBalance = acct.equity;
+    buyingPower = acct.buying_power;
+  } catch { /* paper defaults */ }
+
+  // Manual trades use the standard momentum level math (1.2x ATR stop, 2.2x target).
+  const strategy = 'momentum' as const;
+  const levels = calculateLevels({
+    instrument: input.instrument,
+    direction: input.direction,
+    entryPrice: currentPrice,
+    atr,
+    strategy,
+  });
+
+  // In low-ATR conditions the stop hits the per-instrument minimum floor while
+  // the ATR-based target stays tight, dropping R/R below the guard's 1.6 min.
+  // For a manual trade, widen the target to a clean 2:1 on the actual stop
+  // distance so the order isn't rejected for R/R.
+  const tick = inst.tickSize > 0 ? inst.tickSize : 0.01;
+  const roundTick = (v: number) => Number((Math.round(v / tick) * tick).toFixed(6));
+  const stopDistance = Math.abs(currentPrice - levels.stopLoss);
+  let takeProfit = levels.takeProfit;
+  let rewardToRisk = levels.rewardToRisk;
+  if (rewardToRisk < 1.8 && stopDistance > 0) {
+    takeProfit = roundTick(
+      input.direction === 'long' ? currentPrice + stopDistance * 2 : currentPrice - stopDistance * 2,
+    );
+    rewardToRisk = Number((Math.abs(takeProfit - currentPrice) / stopDistance).toFixed(2));
+  }
+
+  // Drawdown for sizing.
+  const sb = supabaseService();
+  const { data: lastSnap } = await sb
+    .from('account_snapshots').select('peak_equity').eq('mode', input.mode)
+    .order('snapshot_at', { ascending: false }).limit(1).maybeSingle();
+  const peak = lastSnap?.peak_equity ?? accountBalance;
+  const drawdownPct = peak > 0 ? ((peak - accountBalance) / peak) * 100 : 0;
+
+  const sizeResult = calculatePositionSize(
+    accountBalance,
+    currentPrice,
+    levels.stopLoss,
+    input.instrument,
+    80,
+    input.tier === 'half' ? 'half' : 'full',
+    drawdownPct,
+  );
+  let size = sizeResult.contracts;
+
+  // Notional cap: the risk sizer only bounds dollar-RISK, not notional. Crypto
+  // is bought outright (no margin), so cap size to available CASH, not the
+  // margin buying power (which is ~2x equity for stocks and would over-size).
+  const multiplier = inst.contractMultiplier ?? 1;
+  const cashAvailable = Math.min(accountBalance, buyingPower);
+  const maxAffordable = Math.floor((cashAvailable * 0.95) / (currentPrice * multiplier));
+  if (maxAffordable < 1) {
+    return { status: 'skipped', reason: `Insufficient buying power for 1 unit of ${input.instrument}` };
+  }
+  if (size > maxAffordable) size = maxAffordable;
+  if (size < 1) {
+    return { status: 'skipped', reason: 'Position size rounded to 0' };
+  }
+
+  const dollarRisk = Number((stopDistance * multiplier * size).toFixed(2));
+
+  if (input.dryRun) {
+    return {
+      status: 'preview',
+      reason: 'Preview only',
+      preview: {
+        entryPrice: currentPrice,
+        stopLoss: levels.stopLoss,
+        takeProfit,
+        size,
+        rewardToRisk,
+        dollarRisk,
+      },
+    };
+  }
+
+  // Risk guard (manual: bypasses only the bot on/off toggle).
+  const guard = await passesRiskGuard({
+    mode: input.mode,
+    instrument: input.instrument,
+    strategy,
+    proposedEntry: currentPrice,
+    proposedStop: levels.stopLoss,
+    proposedTarget: takeProfit,
+    proposedSize: size,
+    manual: true,
+  });
+  if (!guard.approved) {
+    return { status: 'skipped', reason: `Risk guard: ${guard.reason}` };
+  }
+  const finalSize = Math.min(guard.adjustedSize ?? size, maxAffordable);
+  if (finalSize < 1) {
+    return { status: 'skipped', reason: 'Risk guard reduced size below 1' };
+  }
+
+  // Record a manual signal row so the trade has a reference + shows in the feed.
+  const { data: sigRow, error: sigErr } = await sb
+    .from('signals')
+    .insert({
+      mode: input.mode,
+      instrument: input.instrument,
+      strategy,
+      direction: input.direction,
+      rsi: 50,
+      macd: 0,
+      macd_histogram: 0,
+      volume_ratio: 1,
+      key_level_break: false,
+      atr,
+      regime: 'ranging',
+      raw_score: 100,
+      sentiment_score: null,
+      total_score: 100,
+      action: 'enter',
+      claude_explanation: 'Manual trade entered from the dashboard.',
+    })
+    .select('*')
+    .single();
+  if (sigErr || !sigRow) {
+    return { status: 'skipped', reason: `Could not record manual signal: ${sigErr?.message ?? 'unknown'}` };
+  }
+
+  const result = await executeEntry({
+    signal: sigRow as Signal,
+    direction: input.direction,
+    entryPrice: currentPrice,
+    stopLoss: levels.stopLoss,
+    takeProfit,
+    size: finalSize,
+    mode: input.mode,
+  });
+  if (!result.success) {
+    return { status: 'skipped', reason: `Order failed: ${result.error ?? 'unknown'}` };
+  }
+  return { status: 'executed', reason: 'Manual order placed', tradeId: result.tradeId ?? undefined };
 }

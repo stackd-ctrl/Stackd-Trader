@@ -9,6 +9,7 @@ import {
   cancelOrder,
   closePosition,
   getOrders,
+  getPositions,
   placeOrder,
   type AlpacaOrder,
 } from '@/lib/alpaca/client';
@@ -105,6 +106,12 @@ async function withAlpacaTimeout<T>(promise: Promise<T>, label: string): Promise
   ]);
 }
 
+// Alpaca rejects prices with more than 9 decimal places. Float math (e.g.
+// stopLoss * 0.998) easily produces 2126.13919999999, so clamp precision.
+function roundPrice(p: number): number {
+  return Number(p.toFixed(p >= 1 ? 2 : 6));
+}
+
 async function pollFill(orderId: string): Promise<AlpacaOrder | null> {
   for (let i = 0; i < FILL_MAX_POLLS; i++) {
     const orders = await withAlpacaTimeout(getOrders('all'), `getOrders for ${orderId}`);
@@ -151,6 +158,13 @@ export async function executeEntry(input: ExecuteEntryInput): Promise<ExecuteEnt
   });
 
   // Step 2: place entry limit order.
+  // Alpaca crypto rejects time_in_force 'day' (only gtc/ioc/fok are valid for
+  // crypto); stocks/futures use 'day'.
+  // Crypto: market entry with gtc (limit-at-snapshot rarely fills since price
+  // moves between the quote and the order, and crypto rejects tif 'day').
+  // Stocks/futures: limit entry with 'day'.
+  const isCrypto = inst.class === 'crypto';
+  const entryTif = isCrypto ? 'gtc' : 'day';
   const entrySide = input.direction === 'long' ? 'buy' : 'sell';
   let entryOrder: AlpacaOrder;
   try {
@@ -159,9 +173,9 @@ export async function executeEntry(input: ExecuteEntryInput): Promise<ExecuteEnt
         symbol: inst.alpacaSymbol,
         side: entrySide,
         qty: input.size,
-        type: 'limit',
-        limit_price: input.entryPrice,
-        time_in_force: 'day',
+        type: isCrypto ? 'market' : 'limit',
+        limit_price: isCrypto ? undefined : input.entryPrice,
+        time_in_force: entryTif,
         client_order_id: `entry_${input.signal.id.slice(0, 8)}_${Date.now()}`,
       }),
       'placeOrder(entry)',
@@ -183,6 +197,22 @@ export async function executeEntry(input: ExecuteEntryInput): Promise<ExecuteEnt
   }
   const actualFillPrice = filled.filled_avg_price ?? input.entryPrice;
 
+  // Determine the exit quantity from what we ACTUALLY hold. Crypto market fills
+  // deduct the fee from the filled asset, so both the requested size and the
+  // order's filled_qty overstate holdings and selling them 403s. The position's
+  // qty is the source of truth; floor to 4 dp so we never request a hair more
+  // than we hold (dust rejection).
+  let exitQty = filled.filled_qty > 0 ? filled.filled_qty : input.size;
+  if (inst.class === 'crypto') {
+    const slugless = inst.alpacaSymbol.replace('/', '');
+    try {
+      const positions = await withAlpacaTimeout(getPositions(), 'getPositions(post-entry)');
+      const pos = positions.find((p) => p.symbol === slugless || p.symbol === inst.alpacaSymbol);
+      if (pos && pos.qty > 0) exitQty = pos.qty;
+    } catch { /* fall back to filled_qty */ }
+    exitQty = Math.floor(exitQty * 1e4) / 1e4;
+  }
+
   // Step 4: place stop loss + take profit AFTER fill.
   // Side flips: long entry → sell stops/targets; short entry → buy stops/targets.
   const exitSide = input.direction === 'long' ? 'sell' : 'buy';
@@ -190,49 +220,56 @@ export async function executeEntry(input: ExecuteEntryInput): Promise<ExecuteEnt
   let stopOrder: AlpacaOrder | null = null;
   let targetOrder: AlpacaOrder | null = null;
 
-  try {
-    stopOrder = await withAlpacaTimeout(
-      placeOrder({
-        symbol: inst.alpacaSymbol,
-        side: exitSide,
-        qty: input.size,
-        type: 'stop_limit',
-        stop_price: input.stopLoss,
-        limit_price: input.stopLoss * (input.direction === 'long' ? 0.998 : 1.002), // 0.2% slippage band
-        time_in_force: 'gtc',
-        client_order_id: `stop_${input.signal.id.slice(0, 8)}_${Date.now()}`,
-      }),
-      'placeOrder(stop)',
-    );
-  } catch (err) {
-    await auditEvent(input.mode, 'Stop loss order failed; closing position at market', 'error', {
-      error: (err as Error).message, entry_order_id: entryOrder.id,
-    });
-    try { await withAlpacaTimeout(closePosition(inst.alpacaSymbol), 'emergency closePosition'); } catch { /* swallowed */ }
-    return { success: false, tradeId: null, orderId: entryOrder.id, error: `Stop order failed: ${(err as Error).message}` };
-  }
+  // CRYPTO: Alpaca does NOT support OCO/bracket orders for crypto. A resting
+  // stop and a resting target can't coexist because each sell order reserves
+  // the whole position. So for crypto we place NO native exit orders; the
+  // position monitor enforces stop/target in software (closes at market when
+  // price crosses). Stocks/futures keep the native bracket below.
+  if (!isCrypto) {
+    try {
+      stopOrder = await withAlpacaTimeout(
+        placeOrder({
+          symbol: inst.alpacaSymbol,
+          side: exitSide,
+          qty: exitQty,
+          type: 'stop_limit',
+          stop_price: roundPrice(input.stopLoss),
+          limit_price: roundPrice(input.stopLoss * (input.direction === 'long' ? 0.998 : 1.002)), // 0.2% slippage band
+          time_in_force: 'gtc',
+          client_order_id: `stop_${input.signal.id.slice(0, 8)}_${Date.now()}`,
+        }),
+        'placeOrder(stop)',
+      );
+    } catch (err) {
+      await auditEvent(input.mode, 'Stop loss order failed; closing position at market', 'error', {
+        error: (err as Error).message, entry_order_id: entryOrder.id,
+      });
+      try { await withAlpacaTimeout(closePosition(inst.alpacaSymbol), 'emergency closePosition'); } catch { /* swallowed */ }
+      return { success: false, tradeId: null, orderId: entryOrder.id, error: `Stop order failed: ${(err as Error).message}` };
+    }
 
-  try {
-    targetOrder = await withAlpacaTimeout(
-      placeOrder({
-        symbol: inst.alpacaSymbol,
-        side: exitSide,
-        qty: input.size,
-        type: 'limit',
-        limit_price: input.takeProfit,
-        time_in_force: 'gtc',
-        client_order_id: `tgt_${input.signal.id.slice(0, 8)}_${Date.now()}`,
-      }),
-      'placeOrder(target)',
-    );
-  } catch (err) {
-    // Stop placed but target failed — still close out for safety.
-    await auditEvent(input.mode, 'Target order failed; cancelling stop and closing at market', 'error', {
-      error: (err as Error).message, entry_order_id: entryOrder.id, stop_order_id: stopOrder?.id,
-    });
-    try { if (stopOrder) await withAlpacaTimeout(cancelOrder(stopOrder.id), 'cancel stop on target fail'); } catch { /* ignore */ }
-    try { await withAlpacaTimeout(closePosition(inst.alpacaSymbol), 'emergency closePosition'); } catch { /* swallowed */ }
-    return { success: false, tradeId: null, orderId: entryOrder.id, error: `Target order failed: ${(err as Error).message}` };
+    try {
+      targetOrder = await withAlpacaTimeout(
+        placeOrder({
+          symbol: inst.alpacaSymbol,
+          side: exitSide,
+          qty: exitQty,
+          type: 'limit',
+          limit_price: roundPrice(input.takeProfit),
+          time_in_force: 'gtc',
+          client_order_id: `tgt_${input.signal.id.slice(0, 8)}_${Date.now()}`,
+        }),
+        'placeOrder(target)',
+      );
+    } catch (err) {
+      // Stop placed but target failed — still close out for safety.
+      await auditEvent(input.mode, 'Target order failed; cancelling stop and closing at market', 'error', {
+        error: (err as Error).message, entry_order_id: entryOrder.id, stop_order_id: stopOrder?.id,
+      });
+      try { if (stopOrder) await withAlpacaTimeout(cancelOrder(stopOrder.id), 'cancel stop on target fail'); } catch { /* ignore */ }
+      try { await withAlpacaTimeout(closePosition(inst.alpacaSymbol), 'emergency closePosition'); } catch { /* swallowed */ }
+      return { success: false, tradeId: null, orderId: entryOrder.id, error: `Target order failed: ${(err as Error).message}` };
+    }
   }
 
   // Step 5: persist trade record.
@@ -247,13 +284,13 @@ export async function executeEntry(input: ExecuteEntryInput): Promise<ExecuteEnt
       entry_price: actualFillPrice,
       stop_loss: input.stopLoss,
       take_profit: input.takeProfit,
-      quantity: input.size,
+      quantity: exitQty,
       status: 'open',
       signal_score: input.signal.total_score,
       claude_reasoning: input.signal.claude_explanation,
       entry_order_id: entryOrder.id,
-      stop_order_id: stopOrder.id,
-      target_order_id: targetOrder.id,
+      stop_order_id: stopOrder?.id ?? null,
+      target_order_id: targetOrder?.id ?? null,
       contract_multiplier: inst.contractMultiplier,
     })
     .select('id')
@@ -263,8 +300,8 @@ export async function executeEntry(input: ExecuteEntryInput): Promise<ExecuteEnt
     await auditEvent(input.mode, 'trades insert failed after orders placed', 'error', {
       error: insertErr?.message ?? 'unknown',
       entry_order_id: entryOrder.id,
-      stop_order_id: stopOrder.id,
-      target_order_id: targetOrder.id,
+      stop_order_id: stopOrder?.id ?? null,
+      target_order_id: targetOrder?.id ?? null,
     });
     return { success: false, tradeId: null, orderId: entryOrder.id, error: 'Failed to persist trade row' };
   }
@@ -356,8 +393,9 @@ export async function executeExit(tradeId: string, reason: ExitReason): Promise<
     await new Promise((r) => setTimeout(r, 1000));
     try {
       const orders = await withAlpacaTimeout(getOrders('all'), 'getOrders(post-close)');
+      const slugless = inst.alpacaSymbol.replace('/', '');
       const candidates = orders
-        .filter((o) => o.symbol === inst.alpacaSymbol && o.side === closeSide && o.filled_avg_price !== null)
+        .filter((o) => (o.symbol === inst.alpacaSymbol || o.symbol === slugless) && o.side === closeSide && o.filled_avg_price !== null)
         .sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
       if (candidates[0]?.filled_avg_price !== null && candidates[0]?.filled_avg_price !== undefined) {
         exitPrice = candidates[0].filled_avg_price;

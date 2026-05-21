@@ -65,15 +65,33 @@ export async function monitorPositions(mode: TradeMode): Promise<void> {
       continue;
     }
 
-    // CHECK 1: bracket order health.
-    const stopAlive   = trade.stop_order_id   && openOrders.find((o) => o.id === trade.stop_order_id);
-    const targetAlive = trade.target_order_id && openOrders.find((o) => o.id === trade.target_order_id);
+    const isCrypto = inst.class === 'crypto';
 
-    if (!stopAlive && trade.stop_order_id) {
-      await replaceStop(trade.id, trade.stop_loss, trade.quantity, trade.direction!, inst.alpacaSymbol, trade.mode);
-    }
-    if (!targetAlive && trade.target_order_id) {
-      await replaceTarget(trade.id, trade.take_profit, trade.quantity, trade.direction!, inst.alpacaSymbol, trade.mode);
+    // CHECK 1: enforce stop/target.
+    if (isCrypto) {
+      // Crypto has no native bracket (Alpaca has no crypto OCO), so the monitor
+      // is the stop/target. Close at market when price crosses either level.
+      if (trade.direction) {
+        try {
+          const price = (await getSnapshot(trade.instrument)).price;
+          const hitStop = trade.direction === 'long' ? price <= trade.stop_loss : price >= trade.stop_loss;
+          const hitTarget = trade.direction === 'long' ? price >= trade.take_profit : price <= trade.take_profit;
+          if (hitStop) { await executeExit(trade.id, 'stop_loss'); continue; }
+          if (hitTarget) { await executeExit(trade.id, 'take_profit'); continue; }
+        } catch (err) {
+          console.warn(`[positionMonitor] crypto stop/target check failed for ${trade.instrument}`, err);
+        }
+      }
+    } else {
+      // Native bracket health (stocks/futures): replace any missing leg.
+      const stopAlive   = trade.stop_order_id   && openOrders.find((o) => o.id === trade.stop_order_id);
+      const targetAlive = trade.target_order_id && openOrders.find((o) => o.id === trade.target_order_id);
+      if (!stopAlive && trade.stop_order_id) {
+        await replaceStop(trade.id, trade.stop_loss, trade.quantity, trade.direction!, inst.alpacaSymbol, trade.mode);
+      }
+      if (!targetAlive && trade.target_order_id) {
+        await replaceTarget(trade.id, trade.take_profit, trade.quantity, trade.direction!, inst.alpacaSymbol, trade.mode);
+      }
     }
 
     // CHECK 2: breakeven trail for momentum winners.
@@ -95,7 +113,18 @@ export async function monitorPositions(mode: TradeMode): Promise<void> {
         : trade.stop_loss <= trade.entry_price;
       if (alreadyBE) continue;
 
-      await moveStopToBreakeven(trade.id, trade.entry_price, trade.quantity, trade.direction, inst.alpacaSymbol, trade.mode, trade.stop_order_id);
+      if (isCrypto) {
+        // Software breakeven: raise the stored stop to entry. The crypto
+        // stop/target check above closes the position if price falls back.
+        await sb.from('trades').update({ stop_loss: trade.entry_price }).eq('id', trade.id);
+        await sb.from('bot_event_log').insert({
+          mode: trade.mode, level: 'info', category: 'order',
+          message: `Trail to breakeven (software) on trade ${trade.id}`,
+          context: { trade_id: trade.id, new_stop: trade.entry_price },
+        });
+      } else {
+        await moveStopToBreakeven(trade.id, trade.entry_price, trade.quantity, trade.direction, inst.alpacaSymbol, trade.mode, trade.stop_order_id);
+      }
     } catch (err) {
       console.warn(`[positionMonitor] breakeven check failed for ${trade.instrument}`, err);
     }

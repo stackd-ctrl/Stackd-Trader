@@ -12,6 +12,7 @@ import { MorningBrief } from '@/components/MorningBrief';
 import { EveningReport } from '@/components/EveningReport';
 import { AnomalyAlert } from '@/components/AnomalyAlert';
 import { LivePositions } from '@/components/LivePositions';
+import { ManualTrade } from '@/components/ManualTrade';
 import { TradeLog } from '@/components/TradeLog';
 import { PaperActivation } from '@/components/PaperActivation';
 import { PaperProgress } from '@/components/PaperProgress';
@@ -216,13 +217,16 @@ export default function Page() {
           )}
 
           {section === 'positions' && (
-            <LivePositions
-              trades={live.trades}
-              prices={live.prices}
-              todaysTradeCount={status.daily_trades}
-              todaysPnl={status.daily_pnl}
-              onClose={closePosition}
-            />
+            <div className="space-y-4">
+              <ManualTrade mode={mode} />
+              <LivePositions
+                trades={live.trades}
+                prices={live.prices}
+                todaysTradeCount={status.daily_trades}
+                todaysPnl={status.daily_pnl}
+                onClose={closePosition}
+              />
+            </div>
           )}
 
           {section === 'signals'     && <SignalFeed signals={signals} />}

@@ -36,6 +36,7 @@ export interface AlpacaOrder {
   client_order_id: string;
   symbol: string;
   qty: number;
+  filled_qty: number;
   side: 'buy' | 'sell';
   type: 'market' | 'limit' | 'stop' | 'stop_limit';
   status: string;
@@ -173,12 +174,13 @@ export async function getPositions(): Promise<AlpacaPosition[]> {
 }
 
 export async function getOrders(status: 'open' | 'closed' | 'all' = 'open'): Promise<AlpacaOrder[]> {
-  type Raw = Omit<AlpacaOrder, 'qty' | 'limit_price' | 'stop_price' | 'filled_avg_price'>
-    & Record<'qty' | 'limit_price' | 'stop_price' | 'filled_avg_price', string | null>;
+  type Raw = Omit<AlpacaOrder, 'qty' | 'filled_qty' | 'limit_price' | 'stop_price' | 'filled_avg_price'>
+    & Record<'qty' | 'filled_qty' | 'limit_price' | 'stop_price' | 'filled_avg_price', string | null>;
   const raw = await request<Raw[]>(tradingBaseUrl(), `/v2/orders?status=${status}&limit=100`);
   return raw.map((o) => ({
     ...o,
     qty: Number(o.qty),
+    filled_qty: Number(o.filled_qty ?? 0),
     limit_price: o.limit_price === null ? null : Number(o.limit_price),
     stop_price: o.stop_price === null ? null : Number(o.stop_price),
     filled_avg_price: o.filled_avg_price === null ? null : Number(o.filled_avg_price),
@@ -218,11 +220,20 @@ export async function cancelOrder(orderId: string): Promise<void> {
 }
 
 export async function closePosition(symbol: string): Promise<void> {
-  await fetch(`${tradingBaseUrl()}/v2/positions/${encodeURIComponent(symbol)}`, {
+  // Alpaca keys crypto POSITIONS by the slashless symbol ("ETHUSD") even though
+  // ORDERS accept the slash form ("ETH/USD"). Strip the slash for this endpoint,
+  // and surface failures instead of swallowing them (a swallowed 404 here once
+  // left a ~$94k position open after a failed bracket).
+  const positionSymbol = symbol.replace('/', '');
+  const res = await fetch(`${tradingBaseUrl()}/v2/positions/${encodeURIComponent(positionSymbol)}`, {
     method: 'DELETE',
     headers: authHeaders(),
     cache: 'no-store',
   });
+  // 404 = no open position (already flat) — treat as success.
+  if (!res.ok && res.status !== 404) {
+    throw new AlpacaError(`closePosition ${res.status} for ${positionSymbol}`, res.status, await safeBody(res));
+  }
 }
 
 // ---- Snapshot helpers (used by /api/prices) --------------------------------

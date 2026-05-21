@@ -24,6 +24,13 @@ export interface RiskGuardInput {
   proposedStop: number;
   proposedTarget: number;
   proposedSize: number;
+  /**
+   * Manual (human-initiated) trade. Bypasses ONLY the bot on/off toggle in
+   * CHECK 3 — every other guard (loss limit, R/R, position size, existing
+   * position, drawdown, cooldown) still applies. The user can open a trade
+   * while the automated bot is idle, but not while a safety pause is active.
+   */
+  manual?: boolean;
 }
 
 export interface RiskGuardResult {
@@ -96,7 +103,7 @@ export async function passesRiskGuard(input: RiskGuardInput): Promise<RiskGuardR
     await log('blocked', 'bot_status_read', r);
     return { approved: false, reason: r, failedCheck: 'bot_status_read' };
   }
-  if (!status.is_active) {
+  if (!status.is_active && !input.manual) {
     const r = 'Bot is paused';
     await log('blocked', 'bot_inactive', r);
     return { approved: false, reason: r, failedCheck: 'bot_inactive' };
